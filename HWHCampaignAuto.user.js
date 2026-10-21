@@ -12,8 +12,8 @@
 // @match        https://www.hero-wars.com/*
 // @match        https://www.hero-wars.cn/*
 // @match        https://apps-1701433570146040.apps.fbsbx.com/*
-// @downloadURL  https://gitverse.ru/api/repos/emz13/HWHCampaignAuto/raw/branch/master/HWHCampaignAuto.user.js
-// @updateURL    https://gitverse.ru/api/repos/emz13/HWHCampaignAuto/raw/branch/master/HWHCampaignAuto.user.js
+// @downloadURL  https://github.com/emz13666/HWHCampaignAuto/raw/refs/heads/main/HWHCampaignAuto.user.js
+// @updateURL    https://github.com/emz13666/HWHCampaignAuto/raw/refs/heads/main/HWHCampaignAuto.user.js
 // @run-at       document-end
 // @grant        none
 // ==/UserScript==
