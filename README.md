@@ -2,7 +2,7 @@
 
 Расширение (userscript) для игры **Hero Wars** / **Хроники Хаоса**, работающее поверх [HeroWarsHelper](https://zingery.ru/scripts/HeroWarsHelper.user.js). Автоматически проходит кампанию по заданному диапазону миссий: с рейдом на 3★, с автоопределением стартовой точки, с показом названий миссий и понятной причиной остановки.
 
-[![Установить](https://img.shields.io/badge/Установить-userscript-green)](https://gitverse.ru/api/repos/emz13/HWHCampaignAuto/raw/branch/master/HWHCampaignAuto.user.js)
+[![Установить](https://img.shields.io/badge/Установить-userscript-green)](https://github.com/emz13666/HWHCampaignAuto/raw/refs/heads/main/HWHCampaignAuto.user.js)
 ![Версия](https://img.shields.io/badge/version-1.0.7-blue)
 ![Лицензия](https://img.shields.io/badge/license-MIT-lightgrey)
 
@@ -35,6 +35,6 @@
    - [HeroWarsHelper.user.js](https://zingery.ru/scripts/HeroWarsHelper.user.js)
 
 3. Установите **HWHCampaignAuto**:
-   - **[⬇ Установить HWHCampaignAuto](https://gitverse.ru/api/repos/emz13/HWHCampaignAuto/raw/branch/master/HWHCampaignAuto.user.js)**
+   - **[⬇ Установить HWHCampaignAuto](https://github.com/emz13666/HWHCampaignAuto/raw/refs/heads/main/HWHCampaignAuto.user.js)**
 
 4. Откройте игру — [hero-wars.com](https://www.hero-wars.com/), [hero-wars.cn](https://www.hero-wars.cn/) или Facebook-версию.
