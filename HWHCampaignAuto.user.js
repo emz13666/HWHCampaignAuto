@@ -2,7 +2,7 @@
 // @name         HWHCampaignAuto
 // @name:ru      Авто-кампания
 // @namespace    HWHCampaignAuto
-// @version      1.0.15
+// @version      1.0.23
 // @description  Автопрохождение кампании в HeroWarsHelper с подробными логами.
 // @description:ru Автопрохождение кампании: названия миссий, подробные логи, причины остановки, стоп — клик по статусу.
 // @author       emz13
@@ -18,7 +18,7 @@
 // @grant        none
 // ==/UserScript==
 
-console.log('%c[HWHCampaignAuto] build v1.0.15 loaded @ ' + new Date().toISOString(), 'color:#ffd24d;font-weight:bold');
+console.log(`%c[HWHCampaignAuto] build v${GM_info.script.version} loaded @ ${new Date().toISOString()}`, 'color:#ffd24d;font-weight:bold');
 console.log('%c[HWHCampaignAuto] waiting for HWH...', 'color:#ffd24d');
 
 (async function () {
@@ -27,9 +27,10 @@ console.log('%c[HWHCampaignAuto] waiting for HWH...', 'color:#ffd24d');
 const LOG = '[HWHCampaignAuto]';
 const SETTINGS_KEY = 'HWHCampaignAuto.settings';
 const LAST_ATTEMPT_KEY = 'HWHCampaignAuto.lastAttempt';
-const WAIT_HWH_TIMEOUT = 60000;
+const WAIT_HWH_TIMEOUT = 150000;
 const HEROIC_RAID_LIMIT = 3;
 const ENERGY_REFRESH_EVERY = 5;
+const MIN_GAP_BETWEEN_MISSIONS_MS = 3000;
 
 /* ===== Логирование ===== */
 function lInfo(...a)  { console.log(LOG, ...a); }
@@ -102,9 +103,10 @@ async function waitForHelper(timeout = WAIT_HWH_TIMEOUT) {
     while (Date.now() - start < timeout) {
         const g = globalThis;
         if (g.HWHClasses && g.HWHFuncs && g.HWHFuncs.setProgress && g.HWHData && g.Caller && g.Calc) return true;
-        if (Date.now() - lastLog > 5000) {
+        if (Date.now() - lastLog > 10000) {
             lastLog = Date.now();
-            lWarn(`жду HWH… (${((Date.now() - start) / 1000).toFixed(0)}с): HWHClasses=${!!g.HWHClasses} HWHFuncs=${!!g.HWHFuncs} HWHData=${!!g.HWHData} Caller=${!!g.Caller} Calc=${!!g.Calc}`);
+            const elapsed = ((Date.now() - start) / 1000).toFixed(0);
+            lWarn(`жду HWH… (${elapsed}с / ${(timeout/1000).toFixed(0)}с): HWHClasses=${!!g.HWHClasses} HWHFuncs=${!!g.HWHFuncs} HWHData=${!!g.HWHData} Caller=${!!g.Caller} Calc=${!!g.Calc}`);
         }
         await new Promise(r => setTimeout(r, 500));
     }
@@ -118,11 +120,17 @@ function showHWHNotFoundPopup() {
         if (document.getElementById(id)) return;
         const wrap = document.createElement('div');
         wrap.id = id;
-        wrap.style.cssText = 'position:fixed;left:50%;top:20px;transform:translateX(-50%);z-index:2147483647;background:#190e08e6;border:2px solid #ce9767;border-radius:10px;padding:14px 18px;color:#fce1ac;font:600 14px/1.4 sans-serif;box-shadow:0 6px 24px #000a;max-width:520px;text-align:center;';
-        wrap.innerHTML = '⚠️ <b>HeroWarsHelper не найден!</b><br>Установите/включите <a style="color:#ffd24d" target="_blank" href="https://zingery.ru/scripts/HeroWarsHelper.user.js">HeroWarsHelper</a> и перезагрузите страницу.<div style="margin-top:8px"><button id="'+id+'-btn" style="cursor:pointer;background:#a37738;border:1px solid #e1a960;color:#fce1ac;padding:6px 14px;border-radius:6px;font-weight:700">OK</button></div>';
+        wrap.style.cssText = 'position:fixed;left:50%;top:20px;transform:translateX(-50%);z-index:2147483647;background:#190e08e6;border:2px solid #ce9767;border-radius:10px;padding:16px 20px;color:#fce1ac;font:600 14px/1.4 sans-serif;box-shadow:0 6px 24px #000a;max-width:540px;text-align:center;';
+        const seconds = Math.round(WAIT_HWH_TIMEOUT / 1000);
+        wrap.innerHTML =
+            '⚠️ <b>HeroWarsHelper не найден!</b><br><br>' +
+            `Скрипт HeroWarsHelper (https://zingery.ru/scripts/HeroWarsHelper.user.js) не загрузился за ${seconds} секунд.<br><br>` +
+            'Проверьте, что он <b>установлен</b> и <b>включён</b> в Tampermonkey, и перезагрузите страницу игры.<br><br>' +
+            'Это расширение (HWHCampaignAuto) сейчас завершит работу.' +
+            '<div style="margin-top:12px"><button id="'+id+'-btn" style="cursor:pointer;background:#a37738;border:1px solid #e1a960;color:#fce1ac;padding:6px 16px;border-radius:6px;font-weight:700">OK</button></div>';
         document.body.appendChild(wrap);
         wrap.querySelector('#'+id+'-btn').onclick = () => wrap.remove();
-        setTimeout(() => { if (wrap.isConnected) wrap.remove(); }, 15000);
+        setTimeout(() => { if (wrap.isConnected) wrap.remove(); }, 10000);
     } catch (e) { alert(msg); }
 }
 
@@ -135,6 +143,9 @@ const defaultSettings = {
     stopOnDefeat: true,
     onlyHeroic: false,
     raidHeroicX3: true,
+    startFrom: 'manual',
+    skipPassed: false,
+    skipLowStars: false,
 };
 function loadSettings() {
     try { return { ...defaultSettings, ...JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}') }; }
@@ -157,16 +168,10 @@ function saveLastAttempt(obj) {
 }
 
 /* ===== HWH готов? ===== */
-if (!(await waitForHelper())) {
-    lFail('HeroWarsHelper не найден');
+const hwhReady = await waitForHelper();
+if (!hwhReady) {
+    lFail(`HeroWarsHelper не найден за ${(WAIT_HWH_TIMEOUT/1000).toFixed(0)} секунд — завершение работы скрипта`);
     showHWHNotFoundPopup();
-    const recheck = setInterval(async () => {
-        if (await waitForHelper(1500)) {
-            clearInterval(recheck);
-            lOk('HWH найден (поздний старт)');
-            boot();
-        }
-    }, 3000);
     return;
 }
 lOk('HWH найден, запускаю boot()');
@@ -186,14 +191,13 @@ function getMissionTitle(missionId) {
     if (missionTitleCache.has(id)) return missionTitleCache.get(id);
     let title = null;
     try {
-        const t = globalThis.cheats?.translate?.('LIB_MISSION_NAME_' + id);
-        if (t && typeof t === 'string' && !looksUntranslated(t) && t !== 'LIB_MISSION_NAME_' + id) title = t;
-    } catch (e) {}
-    if (!title) {
-        try {
-            const libData = globalThis.lib?.data;
-            const m = libData?.mission?.[id] || globalThis.lib?.getData?.('mission')?.[id];
-            if (m) {
+        const m = globalThis.lib?.data?.mission?.[id] || globalThis.lib?.getData?.('mission')?.[id];
+        if (!m) {
+            title = null;
+        } else {
+            const t = globalThis.cheats?.translate?.('LIB_MISSION_NAME_' + id);
+            if (t && typeof t === 'string' && !looksUntranslated(t) && t !== 'LIB_MISSION_NAME_' + id) title = t;
+            if (!title) {
                 const cand = m.clientData?.title || m.clientData?.name || m.title || m.name;
                 if (cand && typeof cand === 'string') {
                     if (looksUntranslated(cand)) {
@@ -204,8 +208,8 @@ function getMissionTitle(missionId) {
                     } else title = cand;
                 }
             }
-        } catch (e) {}
-    }
+        }
+    } catch (e) {}
     missionTitleCache.set(id, title);
     return title;
 }
@@ -232,6 +236,46 @@ function isHeroicMission(missionId) {
     return false;
 }
 
+/* ===== Тип миссии ===== */
+function getMissionSurvivalType(missionId) {
+    const id = +missionId;
+    try {
+        const m = globalThis.lib?.data?.mission?.[id];
+        if (m && m.survivalType != null && m.survivalType !== 0 && m.survivalType !== '') {
+            return String(m.survivalType);
+        }
+    } catch (e) {}
+    return null;
+}
+function isTitanMission(missionId) {
+    return getMissionSurvivalType(missionId) === 'titan';
+}
+
+/* ===== Не поддерживается авто-прохождением =====
+ * !m              — миссии нет в lib (220, 221, 223+)
+ * !m.normalMode   — нет обычного режима
+ * #219 (survivalType='hero') — обычный бой с героями.
+ * #222 (survivalType='titan') — обычный бой с титанами из teamGetAll.titan_mission.
+ */
+function isUnsupportedMission(missionId) {
+    const id = +missionId;
+    try {
+        const m = globalThis.lib?.data?.mission?.[id];
+        if (!m) return true;
+        if (!m.normalMode) return true;
+    } catch (e) {}
+    return false;
+}
+function unsupportedReason(missionId) {
+    const id = +missionId;
+    try {
+        const m = globalThis.lib?.data?.mission?.[id];
+        if (!m) return 'нет данных в lib (миссия ещё не введена)';
+        if (!m.normalMode) return 'нет normalMode';
+    } catch (e) {}
+    return 'не поддерживается';
+}
+
 /* ===== Кэш missionGetAll ===== */
 let missionInfoCache = null;
 async function loadMissionInfo() {
@@ -250,13 +294,12 @@ async function loadMissionInfo() {
 }
 function invalidateMissionCache() { missionInfoCache = null; lInfo('кэш миссий сброшен'); }
 
-/* ===== Остаток рейдов на геройской миссии ===== */
+/* ===== Остаток рейдов ===== */
 async function getHeroicRaidRemaining(missionId) {
     const map = await loadMissionInfo();
     const info = map.get(+missionId);
     if (!info) return 0;
-    const spent = (info.triesSpent | 0);
-    return Math.max(0, HEROIC_RAID_LIMIT - spent);
+    return Math.max(0, HEROIC_RAID_LIMIT - (info.triesSpent | 0));
 }
 function consumeHeroicRaidTries(missionId, times) {
     const map = missionInfoCache;
@@ -266,19 +309,25 @@ function consumeHeroicRaidTries(missionId, times) {
     info.triesSpent = Math.min(HEROIC_RAID_LIMIT, (info.triesSpent | 0) + times);
 }
 
-/* ===== Пачка ===== */
-async function getMissionPack() {
+/* ===== Пачки: обычная (герои) и titan (из teamGetAll.titan_mission) ===== */
+async function getPacks() {
     const [teamGetAll, teamGetFavor] = await Caller.send(['teamGetAll', 'teamGetFavor']);
     const list = (teamGetAll && teamGetAll.mission) || [];
     const heroes = list.filter(id => id < 6000);
     const pet = list.filter(id => id >= 6000).pop() || null;
     const rawFavor = (teamGetFavor && teamGetFavor.mission) || {};
     const favor = (rawFavor && typeof rawFavor === 'object' && !Array.isArray(rawFavor)) ? rawFavor : {};
-    if (!heroes.length) throw new Error('Нет героев в пачке кампании (teamGetAll.mission)');
-    return { heroes, pet, favor };
+
+    const titanList = (teamGetAll && teamGetAll.titan_mission) || [];
+    const titanHeroes = titanList.filter(id => +id < 6000);
+
+    return {
+        mission: { heroes, pet, favor },
+        titan: titanHeroes.length ? { heroes: titanHeroes, pet: null, favor: {} } : null,
+    };
 }
 
-/* ===== Стоимость энергии обычного боя (stamina) ===== */
+/* ===== Стоимость ===== */
 function getMissionEnergyCost(missionId) {
     try {
         const m = globalThis.lib?.data?.mission?.[missionId];
@@ -287,8 +336,6 @@ function getMissionEnergyCost(missionId) {
     } catch (e) {}
     return null;
 }
-
-/* ===== Стоимость рейда (teamExp × times; сервер списывает teamExp, а не stamina) ===== */
 function getMissionRaidCost(missionId) {
     try {
         const m = globalThis.lib?.data?.mission?.[missionId];
@@ -300,22 +347,79 @@ function getMissionRaidCost(missionId) {
 
 /* ===== Рейд ===== */
 async function canRaid(missionId) {
+    const id = +missionId;
+    try {
+        const m = globalThis.lib?.data?.mission?.[id];
+        if (m && m.survivalType != null && m.survivalType !== 0 && m.survivalType !== '') {
+            return false;
+        }
+    } catch (e) {}
     const map = await loadMissionInfo();
-    const info = map.get(+missionId);
+    const info = map.get(id);
     return !!(info && (info.stars | 0) >= 3);
 }
-async function findRealStartMission(requestedFirst) {
-    const map = await loadMissionInfo();
-    if (!map.size) return requestedFirst;
-    for (let id = 1; id <= requestedFirst; id++) {
-        const m = map.get(id);
-        if (!m) continue;
-        if ((m.stars | 0) === 0) return id;
-    }
-    return requestedFirst;
+function getMissionStars(missionId) {
+    const info = missionInfoCache?.get(+missionId);
+    return info ? (info.stars | 0) : 0;
 }
 
-/* ===== Актуальная энергия с сервера ===== */
+/* ===== Выбор стартовой миссии ===== */
+const START_MODE_LABELS = {
+    manual:       'по полю «Первая миссия» (с автооткатом)',
+    firstNo3Star: 'с первой без 3★ (нужен бой, не рейд)',
+    firstUnpassed: 'с первой непройденной (0★)',
+};
+function startModeLabel(mode) { return START_MODE_LABELS[mode] || START_MODE_LABELS.manual; }
+
+async function findStartMission(settings) {
+    const map = await loadMissionInfo();
+    const from = Math.max(1, settings.firstMissionId | 0);
+    const to = Math.max(from, settings.lastMissionId | 0);
+    const mode = settings.startFrom || 'manual';
+
+    if (!map.size) return from;
+
+    const findInRange = (startId, endId, predicate) => {
+        for (let id = startId; id <= endId; id++) {
+            const m = map.get(id);
+            if (!m) continue;
+            if (isUnsupportedMission(id)) continue;
+            if (predicate(m)) return id;
+        }
+        return null;
+    };
+
+    if (mode === 'firstNo3Star') {
+        const predicate = settings.skipLowStars
+            ? m => (m.stars | 0) === 0
+            : m => (m.stars | 0) < 3;
+        const found = findInRange(from, to, predicate);
+        if (found != null) return found;
+        lInfo(`режим «${startModeLabel(mode)}»: в диапазоне ${from}..${to} нечего проходить — старт с #${from}`);
+        return from;
+    }
+
+    if (mode === 'firstUnpassed') {
+        const found = findInRange(from, to, m => (m.stars | 0) === 0);
+        if (found != null) return found;
+        lInfo(`режим «${startModeLabel(mode)}»: в диапазоне ${from}..${to} всё пройдено — старт с #${from}`);
+        return from;
+    }
+
+    const found = findInRange(1, from, m => (m.stars | 0) === 0);
+    if (found != null) return found;
+
+    if (isUnsupportedMission(from)) {
+        const nextNormal = findInRange(from + 1, to, () => true);
+        if (nextNormal != null) {
+            lInfo(`стартовая #${from} не поддерживается — старт со следующей обычной #${nextNormal}`);
+            return nextNormal;
+        }
+    }
+    return from;
+}
+
+/* ===== Энергия ===== */
 async function fetchCurrentEnergy(fallback = -1) {
     try {
         const ui = await Caller.send('userGetInfo');
@@ -330,19 +434,18 @@ async function countdownSeconds(seconds) {
     const end = Date.now() + seconds * 1000;
     setBattleCountdown(seconds);
     while (Date.now() < end) {
-        if (!campaignRunning) break;
         await new Promise(r => setTimeout(r, 100));
     }
     setBattleCountdown(null);
     return campaignRunning;
 }
 
-/* ===== Одна миссия (обычный бой) ===== */
-async function runMissionOnce(missionId, pack) {
+/* ===== Одна миссия ===== */
+async function runMissionOnce(missionId, pack, packLabel = '') {
     const argsStart = { id: +missionId, heroes: pack.heroes, favor: pack.favor };
     if (pack.pet) argsStart.pet = pack.pet;
 
-    lStep(`missionStart #${missionId} ${missionLabel(missionId)}; heroes=[${pack.heroes.join(',')}] pet=${pack.pet || '-'}`);
+    lStep(`missionStart #${missionId} ${missionLabel(missionId)}${packLabel}; heroes=[${pack.heroes.join(',')}] pet=${pack.pet || '-'}`);
 
     const battle = await Caller.send({ name: 'missionStart', args: argsStart });
     lInfo(`missionStart #${missionId}: получен battle, расчёт...`);
@@ -351,11 +454,11 @@ async function runMissionOnce(missionId, pack) {
     const win = !!result?.result?.win;
     const timer = (Number(result?.battleTimer) || 10) + 2;
 
-    lInfo(`Calc #${missionId}: win=${win}, stars=${result?.result?.stars ?? '?'}, battleTimer=${result?.battleTimer ?? '?'}s (ждём ${timer}с)`);
+    lInfo(`Calc #${missionId}: win=${win}, stars=${result?.result?.stars ?? '?'}, battleTimer=${result?.battleTimer ?? '?'}s (ждём ${timer}с, progress=${Array.isArray(result?.progress) ? result.progress.length : '?'} записей)`);
 
     if (!win) return { win: false, missionId, aborted: false };
 
-    await countdownSeconds(timer);
+    const shouldContinue = await countdownSeconds(timer);
     lInfo(`missionEnd #${missionId}: отправка результата...`);
 
     await Caller.send({
@@ -364,13 +467,10 @@ async function runMissionOnce(missionId, pack) {
     });
 
     lOk(`missionEnd #${missionId} OK`);
-    return { win: true, missionId, aborted: !campaignRunning };
+    return { win: true, missionId, aborted: !shouldContinue };
 }
 
-/* ===== Классификация ошибок =====
- * ВАЖНО: "Refillable 1" в сообщении сервера — это ЭНЕРГИЯ (stamina), а не лимит рейдов.
- * Настоящий лимит рейдов = "Tries for mission #N".
- */
+/* ===== Классификация ошибок ===== */
 function classifyError(e) {
     const msg = String(e?.message || e || '');
 
@@ -379,24 +479,24 @@ function classifyError(e) {
         return { kind: 'prev_mission', backTo: m ? parseInt(m[1], 10) : null, text: msg };
     }
 
-    // Энергия (stamina, refillable 1) — проверяем ДО raid_limit
-    if (/Refillable\s+1\b/i.test(msg) || /NotEnoughEnergy|NotEnoughStamina|not enough energy|not enough stamina/i.test(msg)) {
-        const m = msg.match(/Has\s+(\d+)\s+need\s+(\d+)/i);
-        return {
-            kind: 'no_energy',
-            text: msg,
-            has: m ? +m[1] : null,
-            need: m ? +m[2] : null,
-        };
+    if (/NotFound in missionStart: Unit/i.test(msg)) {
+        return { kind: 'wrong_units', text: msg };
     }
 
-    // Настоящий лимит рейдов на геройской миссии
+    if (/Refillable\s+1\b/i.test(msg) || /NotEnoughEnergy|NotEnoughStamina|not enough energy|not enough stamina/i.test(msg)) {
+        const m = msg.match(/Has\s+(\d+)\s+need\s+(\d+)/i);
+        return { kind: 'no_energy', text: msg, has: m ? +m[1] : null, need: m ? +m[2] : null };
+    }
+
     if (/Tries for mission|RaidTries|raidLimit/i.test(msg)) {
         return { kind: 'raid_limit', text: msg };
     }
-    // NotEnough in missionRaid без Refillable/Tries — страховочно считаем лимитом
     if (/NotEnough in missionRaid/i.test(msg)) {
         return { kind: 'raid_limit', text: msg };
+    }
+
+    if (/E_Internal|Internal error|Invalid battle/i.test(msg)) {
+        return { kind: 'internal_error', text: msg };
     }
 
     if (/NoAttempts|not enough attempts|no attempts|attemptsLimit/i.test(msg)) {
@@ -414,7 +514,7 @@ function stopCampaign() {
     if (!campaignRunning) return;
     campaignRunning = false;
     lStop('кампания остановлена пользователем (клик по статусу)');
-    pushLiveStatus('⏹ Кампания остановлена (клик по статусу)');
+    pushLiveStatus('⏹ Кампания остановлена (клик по статусу). Текущий бой доиграется.');
 }
 
 /* ===== Основной прогон ===== */
@@ -430,38 +530,48 @@ async function runCampaign(settings) {
     lInfo('════════════════════════════════════════════');
     lInfo('ЗАПУСК КАМПАНИИ', settings);
 
-    let pack;
+    let packs;
     try {
-        pack = await getMissionPack();
-        lInfo(`пачка: heroes=[${pack.heroes.join(',')}] pet=${pack.pet || '-'} favor=${JSON.stringify(pack.favor)}`);
-    }
-    catch (e) {
+        packs = await getPacks();
+        lInfo(`пачка mission: heroes=[${packs.mission.heroes.join(',')}] pet=${packs.mission.pet || '-'} favor=${JSON.stringify(packs.mission.favor)}`);
+        if (packs.titan) {
+            lInfo(`пачка titan: heroes=[${packs.titan.heroes.join(',')}] (для survivalType='titan')`);
+        } else {
+            lInfo('пачка titan: нет данных titan_mission в teamGetAll — titan-survival миссии будут пропущены');
+        }
+    } catch (e) {
         lFail('не удалось получить пачку:', e.message);
         HWHFuncs.setProgress('Кампания: ' + e.message, 6000);
+        campaignRunning = false;
+        return;
+    }
+    if (!packs.mission.heroes.length) {
+        HWHFuncs.setProgress('Кампания: нет героев в пачке кампании', 6000);
         campaignRunning = false;
         return;
     }
 
     let realFirst = settings.firstMissionId;
     try {
-        HWHFuncs.setProgress('Кампания: проверка доступных миссий...', false);
-        lStep(`поиск реальной стартовой миссии в диапазоне 1..${settings.firstMissionId}...`);
-        const detected = await findRealStartMission(settings.firstMissionId);
+        HWHFuncs.setProgress('Кампания: выбор стартовой миссии...', false);
+        lStep(`поиск стартовой миссии (режим: ${startModeLabel(settings.startFrom)})...`);
+        const detected = await findStartMission(settings);
         if (detected !== settings.firstMissionId) {
-            lWarn(`реальный старт: ${missionLabel(detected)} (запрошен #${settings.firstMissionId})`);
-            realFirst = detected;
+            lWarn(`стартовая миссия по режиму: ${missionLabel(detected)} (по полю #${settings.firstMissionId})`);
         } else {
-            lInfo(`старт с ${missionLabel(realFirst)} — всё до неё пройдено`);
+            lInfo(`старт с ${missionLabel(realFirst)}`);
         }
-    } catch (e) { lWarn('findRealStartMission error:', e); }
+        realFirst = detected;
+    } catch (e) { lWarn('findStartMission error:', e); }
 
     const last = Math.max(realFirst, settings.lastMissionId);
     const stats = {
         passed: 0, failed: 0, raided: 0, raidTries: 0, combats: 0,
-        current: realFirst, skipped: 0, skippedNonHeroic: 0, skippedHeroic: 0
+        current: realFirst, skipped: 0, skippedNonHeroic: 0, skippedHeroic: 0,
+        skippedPassed: 0, skippedSurvival: 0, skippedLowStars: 0
     };
     lInfo(`диапазон: ${missionLabel(realFirst)} .. ${missionLabel(last)}  (повторов на миссию: ${settings.repeatPerMission})`);
-    lInfo(`опции: useRaidIfPossible=${settings.useRaidIfPossible} stopOnDefeat=${settings.stopOnDefeat} onlyHeroic=${settings.onlyHeroic} raidHeroicX3=${settings.raidHeroicX3}`);
+    lInfo(`опции: useRaidIfPossible=${settings.useRaidIfPossible} stopOnDefeat=${settings.stopOnDefeat} onlyHeroic=${settings.onlyHeroic} raidHeroicX3=${settings.raidHeroicX3} startFrom=${settings.startFrom} skipPassed=${settings.skipPassed} skipLowStars=${settings.skipLowStars}`);
 
     if (settings.onlyHeroic) {
         let heroicCount = 0, normalCount = 0;
@@ -470,7 +580,7 @@ async function runCampaign(settings) {
                 if (isHeroicMission(id)) heroicCount++;
                 else normalCount++;
             }
-            lInfo(`onlyHeroic=true: в диапазоне геройских=${heroicCount}, обычных=${normalCount} (обычные будут пропущены)`);
+            lInfo(`onlyHeroic=true: в диапазоне геройских=${heroicCount}, обычных=${normalCount}`);
         } catch (e) { lWarn('подсчёт геройских ошибка:', e); }
     }
 
@@ -480,6 +590,7 @@ async function runCampaign(settings) {
     let stopReason = '';
     const forcedMissionIds = new Set();
     let iterCount = 0;
+    let lastMissionEnd = 0;
 
     outer:
     for (let missionId = realFirst; missionId <= last; missionId++) {
@@ -497,7 +608,6 @@ async function runCampaign(settings) {
         stats.current = missionId;
         saveLastAttempt({ id: missionId, ts: Date.now(), title: getMissionTitle(missionId) });
 
-        // Периодическое обновление энергии с сервера (энергию тратят другие расширения)
         iterCount++;
         if (iterCount % ENERGY_REFRESH_EVERY === 0) {
             const fresh = await fetchCurrentEnergy(currentEnergy);
@@ -507,32 +617,65 @@ async function runCampaign(settings) {
             }
         }
 
+        if (isUnsupportedMission(missionId)) {
+            stats.skippedSurvival++;
+            lSkip(`${missionLabel(missionId)} — не поддерживается (${unsupportedReason(missionId)}), пропуск`);
+            continue;
+        }
+
+        const survivalType = getMissionSurvivalType(missionId);
+        const isTitan = survivalType === 'titan';
+        const pack = isTitan ? packs.titan : packs.mission;
+        const packLabel = survivalType ? ` [${survivalType}]` : '';
+
+        if (!pack || !pack.heroes.length) {
+            stats.skippedSurvival++;
+            lSkip(`${missionLabel(missionId)} — ${survivalType}-survival, но пачки нет (titan_mission пуст в teamGetAll), пропуск`);
+            continue;
+        }
+
         const isHeroic = isHeroicMission(missionId);
         const stars3 = await canRaid(missionId);
+        const curStars = getMissionStars(missionId);
+
+        if (settings.skipPassed && stars3) {
+            stats.skippedPassed++;
+            lSkip(`${missionLabel(missionId)} — уже ${curStars}★, пропуск (skipPassed)`);
+            continue;
+        }
+
+        if (settings.skipLowStars && (curStars === 1 || curStars === 2)) {
+            stats.skippedLowStars++;
+            lSkip(`${missionLabel(missionId)} — уже ${curStars}★ (1-2), пропуск (skipLowStars)`);
+            continue;
+        }
+
         const reps = Math.max(1, settings.repeatPerMission | 0);
         const title = missionDisplayName(missionId);
-        const cost = getMissionEnergyCost(missionId);      // stamina для боя
-        const teamExp = getMissionRaidCost(missionId);     // teamExp для рейда
+        const cost = getMissionEnergyCost(missionId);
+        const teamExp = getMissionRaidCost(missionId);
 
-        // Определяем режим рейда
         let raidTimes = 0;
         let heroicRemaining = null;
         let skipMission = false;
 
-        if (isHeroic && stars3 && settings.raidHeroicX3) {
-            heroicRemaining = await getHeroicRaidRemaining(missionId);
-            if (heroicRemaining >= 3) raidTimes = 3;
-            else skipMission = true;
-        } else if (stars3) {
-            if (isHeroic) {
+        if (!isTitan) {
+            if (isHeroic && stars3 && settings.raidHeroicX3) {
                 heroicRemaining = await getHeroicRaidRemaining(missionId);
-                if (settings.useRaidIfPossible) raidTimes = 1;
-            } else if (settings.useRaidIfPossible) {
-                raidTimes = 1;
+                if (heroicRemaining >= 3) raidTimes = 3;
+                else skipMission = true;
+            } else if (stars3) {
+                if (isHeroic) {
+                    heroicRemaining = await getHeroicRaidRemaining(missionId);
+                    if (settings.useRaidIfPossible) raidTimes = 1;
+                } else if (settings.useRaidIfPossible) {
+                    raidTimes = 1;
+                }
             }
         }
 
         const heroicMark = isHeroic ? ' ⭐heroic' : '';
+        const starsMark = ` ${curStars}★`;
         const raidBadge = raidTimes === 3 ? '[рейд×3]' : (raidTimes === 1 ? '[рейд]' : '[бой]');
         const raidLeftInfo = (isHeroic && heroicRemaining !== null)
             ? ` raidLeft=${heroicRemaining}/${HEROIC_RAID_LIMIT}`
@@ -540,19 +683,17 @@ async function runCampaign(settings) {
 
         if (skipMission) {
             stats.skippedHeroic++;
-            lSkip(`${missionLabel(missionId)} ⭐heroic — попыток рейда ${heroicRemaining}/${HEROIC_RAID_LIMIT}, ×3 недоступен → пропуск (raidHeroicX3)`);
+            lSkip(`${missionLabel(missionId)}${starsMark} ⭐heroic — попыток рейда ${heroicRemaining}/${HEROIC_RAID_LIMIT}, ×3 недоступен → пропуск (raidHeroicX3)`);
             continue;
         }
 
-        // Стоимость: рейд = teamExp × times, бой = stamina
         const raidCost = (raidTimes > 0) ? (teamExp ?? cost) : null;
         const totalCost = raidTimes > 0
             ? (raidCost != null ? raidCost * raidTimes : null)
             : (cost != null ? cost : null);
 
-        lInfo(`──────────── ${missionLabel(missionId)}${heroicMark} ${raidBadge} cost=${raidTimes > 0 ? (raidCost ?? '?') : (cost ?? '?')}×${Math.max(raidTimes, 1)}=${totalCost ?? '?'} energy=${currentEnergy >= 0 ? currentEnergy : '?'}${raidLeftInfo}`);
+        lInfo(`──────────── ${missionLabel(missionId)}${starsMark}${heroicMark}${packLabel} ${raidBadge} cost=${raidTimes > 0 ? (raidCost ?? '?') : (cost ?? '?')}×${Math.max(raidTimes, 1)}=${totalCost ?? '?'} energy=${currentEnergy >= 0 ? currentEnergy : '?'}${raidLeftInfo}`);
 
-        // Проверка энергии. Если локально не хватает — сверяемся с сервером (энергия тратится параллельно).
         if (totalCost != null && currentEnergy >= 0 && currentEnergy < totalCost) {
             lInfo(`локально не хватает (${currentEnergy} < ${totalCost}) — запрос актуальной энергии...`);
             const fresh = await fetchCurrentEnergy(currentEnergy);
@@ -567,11 +708,18 @@ async function runCampaign(settings) {
             break outer;
         }
 
+        if (lastMissionEnd) {
+            const elapsed = Date.now() - lastMissionEnd;
+            if (elapsed < MIN_GAP_BETWEEN_MISSIONS_MS) {
+                await new Promise(r => setTimeout(r, MIN_GAP_BETWEEN_MISSIONS_MS - elapsed));
+            }
+        }
+
         for (let r = 0; r < reps; r++) {
             if (!campaignRunning) { stopReason = '⏹ остановлено пользователем (клик по статусу)'; break outer; }
 
             const repLabel = reps > 1 ? ` (${r + 1}/${reps})` : '';
-            const prefix = `Кампания: ${missionId} ${title}${repLabel}${raidBadge !== '[бой]' ? ' ' + raidBadge : ''} — клик для остановки`;
+            const prefix = `Кампания: ${missionId} ${title}${starsMark}${repLabel}${raidBadge !== '[бой]' ? ' ' + raidBadge : ''} — клик для остановки`;
             startLiveStatus(prefix, stopCampaign);
 
             if (reps > 1) lStep(`повтор ${r + 1}/${reps}`);
@@ -588,17 +736,18 @@ async function runCampaign(settings) {
                     if (raidCost != null && currentEnergy > 0) currentEnergy = Math.max(0, currentEnergy - raidCost * raidTimes);
 
                     const rl = isHeroic ? (() => {
-                        const map = missionInfoCache;
-                        const info = map?.get(+missionId);
+                        const info = missionInfoCache?.get(+missionId);
                         const spent = (info?.triesSpent | 0) || 0;
                         return ` (рейдов осталось ${Math.max(0, HEROIC_RAID_LIMIT - spent)}/${HEROIC_RAID_LIMIT})`;
                     })() : '';
 
                     lOk(`рейд ${missionId}${repLabel} ${raidTimes === 3 ? '×3' : '×1'} пройден${rl} (−${raidCost * raidTimes}⚡)`);
                     pushLiveStatus(`Кампания: ${missionId} ${title}${repLabel}: ✓ рейд${raidTimes === 3 ? ' ×3' : ''}`);
+                    lastMissionEnd = Date.now();
                     done = true;
                 } else {
-                    const res = await runMissionOnce(missionId, pack);
+                    const res = await runMissionOnce(missionId, pack, packLabel);
+                    lastMissionEnd = Date.now();
                     if (res.win) {
                         stats.combats++; stats.passed++;
                         lOk(`бой ${missionId}${repLabel} пройден${cost != null ? ` (−${cost}⚡)` : ''}`);
@@ -622,6 +771,15 @@ async function runCampaign(settings) {
 
                 if (cls.kind === 'prev_mission' && cls.backTo && cls.backTo >= 1 && cls.backTo < missionId) {
                     const backTo = cls.backTo;
+                    if (isUnsupportedMission(backTo)) {
+                        stats.failed++;
+                        const sname = missionDisplayName(backTo);
+                        const reason = unsupportedReason(backTo);
+                        lStop(`кампания заблокирована миссией #${backTo} ${sname} (${reason})`);
+                        pushLiveStatus(`Кампания: заблокировано #${backTo} ${sname} (${reason})`);
+                        stopReason = `🚫 миссия #${backTo} ${sname} — ${reason}`;
+                        break outer;
+                    }
                     if (settings.onlyHeroic && !isHeroicMission(backTo)) {
                         forcedMissionIds.add(backTo);
                         lRetry(`Previous mission not completed #${backTo} — геройская #${missionId} требует не-геройскую #${backTo}, проходим принудительно`);
@@ -633,6 +791,14 @@ async function runCampaign(settings) {
                     missionId = backTo - 1;
                     done = true;
                     break;
+                }
+
+                if (cls.kind === 'wrong_units') {
+                    stats.failed++;
+                    lStop(`сервер не принял состав (${packLabel || 'обычная пачка'}) на #${missionId}`);
+                    pushLiveStatus(`Кампания: ${missionId} ${title}: сервер не принял состав`);
+                    stopReason = `🚫 сервер не принял состав на миссии ${missionId} ${title}: ${cls.text.slice(0, 200)}`;
+                    break outer;
                 }
 
                 if (cls.kind === 'no_energy') {
@@ -648,14 +814,13 @@ async function runCampaign(settings) {
                 }
 
                 if (cls.kind === 'raid_limit') {
-                    // Настоящий лимит рейдов (Tries for mission)
                     if (isHeroic) {
                         const info = missionInfoCache?.get(missionId);
                         if (info) info.triesSpent = HEROIC_RAID_LIMIT;
                     }
                     if (isHeroic && settings.raidHeroicX3) {
                         stats.skippedHeroic++;
-                        lSkip(`${missionLabel(missionId)} ⭐heroic — сервер не дал рейд ×3 (Tries), пропуск (raidHeroicX3)`);
+                        lSkip(`${missionLabel(missionId)} ⭐heroic — сервер не дал рейд ×3 (Tries), пропуск`);
                         pushLiveStatus(`Кампания: ${missionId} ${title}: рейд ×3 недоступен — пропуск`);
                         done = true;
                         break;
@@ -663,7 +828,8 @@ async function runCampaign(settings) {
                     lRetry(`рейд ${missionId} недоступен (лимит) — пробую обычным боем`);
                     pushLiveStatus(`Кампания: ${missionId} ${title}: рейд недоступен, пробуем обычный бой`);
                     try {
-                        const res = await runMissionOnce(missionId, pack);
+                        const res = await runMissionOnce(missionId, pack, packLabel);
+                        lastMissionEnd = Date.now();
                         if (res.win) {
                             stats.combats++; stats.passed++;
                             lOk(`обычный бой ${missionId}${repLabel} пройден (вместо рейда)`);
@@ -691,6 +857,17 @@ async function runCampaign(settings) {
                     break;
                 }
 
+                if (cls.kind === 'internal_error') {
+                    stats.failed++;
+                    lFail(`внутренняя ошибка сервера на миссии ${missionId}: ${cls.text.split('\n')[0]}`);
+                    pushLiveStatus(`Кампания: ${missionId} ${title}: внутренняя ошибка сервера`);
+                    if (settings.stopOnDefeat) {
+                        stopReason = `💥 внутренняя ошибка сервера на миссии ${missionId} ${title}: ${cls.text.slice(0, 200)}`;
+                        break outer;
+                    }
+                    break;
+                }
+
                 if (cls.kind === 'no_attempts') {
                     stats.failed++;
                     lStop(`нет попыток на миссию ${missionId}`);
@@ -700,6 +877,12 @@ async function runCampaign(settings) {
                 }
                 if (cls.kind === 'locked') {
                     stats.failed++;
+                    if (/слишком высокой|too high|too fast/i.test(cls.text)) {
+                        lStop(`античит: сервер заблокировал прохождение из-за скорости`);
+                        pushLiveStatus(`Кампания: античит — сервер заблокировал прохождение из-за скорости`);
+                        stopReason = `🚫 античит: сервер заблокировал прохождение из-за скорости.`;
+                        break outer;
+                    }
                     lStop(`миссия ${missionId} заблокирована`);
                     pushLiveStatus(`Кампания: ${missionId} ${title}: миссия заблокирована`);
                     stopReason = `🚫 миссия ${missionId} ${title} недоступна`;
@@ -735,13 +918,16 @@ async function runCampaign(settings) {
     if (!stopReason) {
         const tailHeroic = settings.onlyHeroic ? ` (пропущено не-геройских: ${stats.skippedNonHeroic})` : '';
         const tailX3 = stats.skippedHeroic ? `, геройских-без-×3: ${stats.skippedHeroic}` : '';
+        const tailPassed = stats.skippedPassed ? `, уже-3★: ${stats.skippedPassed}` : '';
+        const tailLow = stats.skippedLowStars ? `, 1-2★: ${stats.skippedLowStars}` : '';
+        const tailSurv = stats.skippedSurvival ? `, survival/unsupported: ${stats.skippedSurvival}` : '';
         stopReason = stats.failed
-            ? `✅ достигнута последняя миссия ${last}${tailHeroic}${tailX3} (было ошибок: ${stats.failed})`
-            : `✅ достигнута последняя миссия ${last}${tailHeroic}${tailX3}`;
+            ? `✅ достигнута последняя миссия ${last}${tailHeroic}${tailX3}${tailPassed}${tailLow}${tailSurv} (было ошибок: ${stats.failed})`
+            : `✅ достигнута последняя миссия ${last}${tailHeroic}${tailX3}${tailPassed}${tailLow}${tailSurv}`;
     }
 
     lInfo('════════════════════════════════════════════');
-    lInfo(`ИТОГ: пройдено=${stats.passed} (рейдов=${stats.raided}, попыток рейда=${stats.raidTries}, боёв=${stats.combats}), ошибок=${stats.failed}, пропущено=${stats.skipped}, не-геройских=${stats.skippedNonHeroic}, геройских-без-×3=${stats.skippedHeroic}, текущая=${stats.current}, энергия=${currentEnergy}`);
+    lInfo(`ИТОГ: пройдено=${stats.passed} (рейдов=${stats.raided}, попыток рейда=${stats.raidTries}, боёв=${stats.combats}), ошибок=${stats.failed}, пропущено=${stats.skipped}, не-геройских=${stats.skippedNonHeroic}, геройских-без-×3=${stats.skippedHeroic}, уже-3★=${stats.skippedPassed}, 1-2★=${stats.skippedLowStars}, survival/unsupported=${stats.skippedSurvival}, текущая=${stats.current}, энергия=${currentEnergy}`);
     if (stopReason.startsWith('✅')) lOk(stopReason);
     else if (stopReason.startsWith('⏹')) lStop(stopReason);
     else lFail(stopReason);
@@ -749,7 +935,10 @@ async function runCampaign(settings) {
 
     const heroicTail = settings.onlyHeroic ? `, не-геройских ${stats.skippedNonHeroic}` : '';
     const x3Tail = stats.skippedHeroic ? `, пропущено геройских (нет ×3): ${stats.skippedHeroic}` : '';
-    const summary = `Кампания: ✓ ${stats.passed}, рейдов ${stats.raided} (${stats.raidTries} попыток), ошибок ${stats.failed}${heroicTail}${x3Tail}<br>${stopReason}`;
+    const passedTail = stats.skippedPassed ? `, уже 3★: ${stats.skippedPassed}` : '';
+    const lowTail = stats.skippedLowStars ? `, 1-2★: ${stats.skippedLowStars}` : '';
+    const survTail = stats.skippedSurvival ? `, survival/unsupported: ${stats.skippedSurvival}` : '';
+    const summary = `Кампания: ✓ ${stats.passed}, рейдов ${stats.raided} (${stats.raidTries} попыток), ошибок ${stats.failed}${heroicTail}${x3Tail}${passedTail}${lowTail}${survTail}<br>${stopReason}`;
     stopLiveStatus(true, summary, () => HWHFuncs.hideProgress(0));
 }
 
@@ -770,22 +959,38 @@ async function openCampaignDialog() {
             ? `↩ Начать с ${lastAttempt.id} ${lastAttempt.title ? '«' + lastAttempt.title + '»' : ''} (прошлый запуск)`
             : '';
         HWHFuncs.popup.custom.innerHTML = `
-            <div style="padding: 6px 14px 10px; color: #fce1ac; font: 600 14px sans-serif; min-width: 360px;">
+            <div style="padding: 6px 14px 10px; color: #fce1ac; font: 600 14px sans-serif; min-width: 440px;">
                 ${showShortcut ? `<div style="margin-bottom:10px;"><button id="cShortcut" type="button" style="cursor:pointer;background:#2a63c6;border:1px solid #5a90e8;color:#fff;padding:5px 10px;border-radius:6px;font-weight:700;">${shortcutDefaultLabel}</button></div>` : ''}
-                <div style="margin-bottom: 10px;">
-                    <label>Первая миссия:
-                        <input id="cFirst" type="number" min="1" value="${s.firstMissionId}"
-                            style="width: 80px; background:#170d07;color:#fce1ac;border:1px solid #cf9250;border-radius:5px;padding:3px 6px;margin-left:6px;"/>
-                    </label>
-                    <div id="cFirstTitle" style="font-size:12px;opacity:0.75;margin-top:3px;margin-left:8px;"></div>
+
+                <div style="display: flex; gap: 24px; margin-bottom: 10px; align-items: flex-start;">
+                    <div>
+                        <label>Первая миссия:
+                            <input id="cFirst" type="number" min="1" value="${s.firstMissionId}"
+                                style="width: 80px; background:#170d07;color:#fce1ac;border:1px solid #cf9250;border-radius:5px;padding:3px 6px;margin-left:6px;"/>
+                        </label>
+                        <div id="cFirstTitle" style="font-size:12px;opacity:0.75;margin-top:3px;margin-left:8px;"></div>
+                    </div>
+                    <div>
+                        <label>Последняя миссия:
+                            <input id="cLast" type="number" min="1" value="${s.lastMissionId}"
+                                style="width: 80px; background:#170d07;color:#fce1ac;border:1px solid #cf9250;border-radius:5px;padding:3px 6px;margin-left:6px;"/>
+                        </label>
+                        <div id="cLastTitle" style="font-size:12px;opacity:0.75;margin-top:3px;margin-left:8px;"></div>
+                    </div>
                 </div>
+
                 <div style="margin-bottom: 10px;">
-                    <label>Последняя миссия:
-                        <input id="cLast" type="number" min="1" value="${s.lastMissionId}"
-                            style="width: 80px; background:#170d07;color:#fce1ac;border:1px solid #cf9250;border-radius:5px;padding:3px 6px;margin-left:6px;"/>
+                    <label>Старт кампании:
+                        <select id="cStartFrom"
+                            style="width: 280px; background:#170d07;color:#fce1ac;border:1px solid #cf9250;border-radius:5px;padding:3px 6px;margin-left:6px;">
+                            <option value="manual" ${s.startFrom === 'manual' ? 'selected' : ''}>По полю «Первая миссия»</option>
+                            <option value="firstNo3Star" ${s.startFrom === 'firstNo3Star' ? 'selected' : ''}>С первой без 3★ (нужен бой, не рейд)</option>
+                            <option value="firstUnpassed" ${s.startFrom === 'firstUnpassed' ? 'selected' : ''}>С первой непройденной (0★)</option>
+                        </select>
                     </label>
-                    <div id="cLastTitle" style="font-size:12px;opacity:0.75;margin-top:3px;margin-left:8px;"></div>
+                    <div id="cStartFromHint" style="font-size:12px;opacity:0.75;margin-top:3px;margin-left:8px;"></div>
                 </div>
+
                 <div style="margin-bottom: 8px;">
                     <label>Повторов на миссию:
                         <input id="cRep" type="number" min="1" value="${s.repeatPerMission}"
@@ -801,11 +1006,14 @@ async function openCampaignDialog() {
                 <div style="margin-bottom: 6px;">
                     <label><input id="cHeroic" type="checkbox" ${s.onlyHeroic ? 'checked' : ''}/> Проходить только геройские миссии (обычные — пропускать)</label>
                 </div>
+                <div style="margin-bottom: 6px;">
+                    <label><input id="cSkipPassed" type="checkbox" ${s.skipPassed ? 'checked' : ''}/> Пропускать миссии, уже пройденные на 3★</label>
+                </div>
+                <div style="margin-bottom: 6px;">
+                    <label><input id="cSkipLowStars" type="checkbox" ${s.skipLowStars ? 'checked' : ''}/> Пропускать миссии, пройденные на 1 или 2★</label>
+                </div>
                 <div style="margin-bottom: 8px;">
                     <label><input id="cStop" type="checkbox" ${s.stopOnDefeat ? 'checked' : ''}/> Останавливаться при поражении/ошибке</label>
-                </div>
-                <div style="margin-top:8px;font-size:12px;opacity:0.7;">
-                    Настройки сохраняются автоматически. Рейд ×3 на геройских гарантирует минимум 1 душу героя, но расходует сразу 3 попытки (лимит 3/день на миссию). Если попыток меньше 3 — геройская миссия <b>пропускается</b> (без ×1 и без обычного боя). Если геройская ещё не 3★ — она проходится обычным боем, чтобы получить 3★ и открыть рейд.
                 </div>
             </div>
         `;
@@ -817,8 +1025,24 @@ async function openCampaignDialog() {
         const stopInput  = document.getElementById('cStop');
         const heroicInput = document.getElementById('cHeroic');
         const heroicX3Input = document.getElementById('cHeroicX3');
+        const skipPassedInput = document.getElementById('cSkipPassed');
+        const skipLowStarsInput = document.getElementById('cSkipLowStars');
+        const startFromSelect = document.getElementById('cStartFrom');
+        const startFromHint = document.getElementById('cStartFromHint');
         const firstTitle = document.getElementById('cFirstTitle');
         const lastTitle  = document.getElementById('cLastTitle');
+
+        const startHintText = {
+            manual:       'Начнёт с указанной «Первой миссии». Если она ещё заблокирована — автооткат до первой непройденной ниже.',
+            firstNo3Star: 'Найдёт в [Первая..Последняя] первую миссию со stars < 3 (0, 1 или 2★).',
+            firstUnpassed: 'Найдёт в [Первая..Последняя] первую непройденную миссию (0★).',
+        };
+
+        const updateStartFromHint = () => {
+            const v = startFromSelect.value || 'manual';
+            if (startFromHint) startFromHint.textContent = startHintText[v] || startHintText.manual;
+        };
+        updateStartFromHint();
 
         const readCurrent = () => ({
             firstMissionId: Math.max(1, parseInt(firstInput.value, 10) || s.firstMissionId),
@@ -828,6 +1052,9 @@ async function openCampaignDialog() {
             stopOnDefeat: !!stopInput.checked,
             onlyHeroic: !!heroicInput.checked,
             raidHeroicX3: !!heroicX3Input.checked,
+            startFrom: startFromSelect.value || 'manual',
+            skipPassed: !!skipPassedInput.checked,
+            skipLowStars: !!skipLowStarsInput.checked,
         });
         const normalizeLast = () => {
             const cur = readCurrent();
@@ -841,8 +1068,12 @@ async function openCampaignDialog() {
             const tl = l > 0 ? getMissionTitle(l) : null;
             const fHeroic = f > 0 && isHeroicMission(f) ? ' ⭐' : '';
             const lHeroic = l > 0 && isHeroicMission(l) ? ' ⭐' : '';
-            firstTitle.textContent = f > 0 ? (tf ? `→ ${tf}${fHeroic}` : `→ название недоступно${fHeroic}`) : '';
-            lastTitle.textContent  = l > 0 ? (tl ? `→ ${tl}${lHeroic}` : `→ название недоступно${lHeroic}`) : '';
+            const fSurv = f > 0 ? getMissionSurvivalType(f) : null;
+            const lSurv = l > 0 ? getMissionSurvivalType(l) : null;
+            const fSurvMark = fSurv ? ` ${fSurv}` : '';
+            const lSurvMark = lSurv ? ` ${lSurv}` : '';
+            firstTitle.textContent = f > 0 ? (tf ? `→ ${tf}${fHeroic}${fSurvMark}` : `→ название недоступно${fHeroic}${fSurvMark}`) : '';
+            lastTitle.textContent  = l > 0 ? (tl ? `→ ${tl}${lHeroic}${lSurvMark}` : `→ название недоступно${lHeroic}${lSurvMark}`) : '';
         };
 
         const shortcutBtn = document.getElementById('cShortcut');
@@ -869,6 +1100,7 @@ async function openCampaignDialog() {
         let saveTimer = null;
         const scheduleSave = () => {
             updateTitlesAndShortcut();
+            updateStartFromHint();
             if (saveTimer) clearTimeout(saveTimer);
             saveTimer = setTimeout(() => {
                 saveSettings(normalizeLast());
@@ -882,6 +1114,9 @@ async function openCampaignDialog() {
         stopInput.addEventListener('change', scheduleSave);
         heroicInput.addEventListener('change', scheduleSave);
         heroicX3Input.addEventListener('change', scheduleSave);
+        skipPassedInput.addEventListener('change', scheduleSave);
+        skipLowStarsInput.addEventListener('change', scheduleSave);
+        startFromSelect.addEventListener('change', scheduleSave);
 
         if (shortcutBtn) {
             shortcutBtn.addEventListener('click', (ev) => {
@@ -924,7 +1159,7 @@ async function openCampaignDialog() {
     });
 }
 
-/* ===== Одна кнопка ===== */
+/* ===== Кнопка ===== */
 function installActionButtons() {
     const arr = HWHData.actionsPopupButtons;
     if (!arr) return false;
@@ -934,7 +1169,7 @@ function installActionButtons() {
     arr.push({
         __campaign: true,
         get msg() { return 'Кампания'; },
-        get title() { return 'Автопрохождение кампании (рейд ×3 на геройских, подробные логи, запоминание позиции)'; },
+        get title() { return 'Автопрохождение кампании (рейд ×3, выбор стартовой, пропуск 3★ / 1-2★, titan-survival)'; },
         result() { openCampaignDialog(); },
         color: 'green',
     });
