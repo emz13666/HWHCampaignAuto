@@ -2,7 +2,7 @@
 // @name         HWHCampaignAuto
 // @name:ru      Авто-кампания
 // @namespace    HWHCampaignAuto
-// @version      1.0.23
+// @version      1.0.24
 // @description  Автопрохождение кампании в HeroWarsHelper с подробными логами.
 // @description:ru Автопрохождение кампании: названия миссий, подробные логи, причины остановки, стоп — клик по статусу.
 // @author       emz13
@@ -171,7 +171,7 @@ function saveLastAttempt(obj) {
 const hwhReady = await waitForHelper();
 if (!hwhReady) {
     lFail(`HeroWarsHelper не найден за ${(WAIT_HWH_TIMEOUT/1000).toFixed(0)} секунд — завершение работы скрипта`);
-    showHWHNotFoundPopup();
+    //showHWHNotFoundPopup();
     return;
 }
 lOk('HWH найден, запускаю boot()');
